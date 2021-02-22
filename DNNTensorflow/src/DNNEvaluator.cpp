@@ -3,22 +3,22 @@
 
 #include <iostream>
 #include <fstream>
-#include <vector>
 
-NNEvaluation::DNNEvaluator::DNNEvaluator(const std::string modelPath, bool verbose)
+NNEvaluation::DNNEvaluator::DNNEvaluator(const std::string modelPath, bool verbose, int outvar)
     : modelPath_(modelPath)
     , graphDef_(nullptr)
     , session_(nullptr)
+    , outvar_(outvar)
     , verbose_(verbose)
 {
     // show tf debug logs
     tensorflow::setLogging("0");
     
-    std::cout << "Model path: "<<modelPath_ << std::endl;
+    //std::cout << "Model path: "<<modelPath_ << std::endl;
     // Parse scaler configuration
     std::string scalerPath = modelPath_ + "scaler.txt";
     std::ifstream inputfile_scaler{scalerPath};
-    std::cout << "Reading file: "<< scalerPath << std::endl;
+    //std::cout << "Reading file: "<< scalerPath << std::endl;
     if(inputfile_scaler.fail())  
     { 
         std::cout << "error" << std::endl;
@@ -29,19 +29,19 @@ NNEvaluation::DNNEvaluator::DNNEvaluator(const std::string modelPath, bool verbo
         std::string varname{};
         while (inputfile_scaler >> varname >> m_ >> s_){
             scaler_factors_.push_back({m_, s_});
-            std::cout << "variable: "<< varname << " " << m_ << " " << s_ << std::endl; 
+            //std::cout << "variable: "<< varname << " " << m_ << " " << s_ << std::endl; 
         }  
     }   
     inputfile_scaler.close();
 
     // Save number of variables
     n_inputs_ = scaler_factors_.size();
-    std::cout << "Working with " << n_inputs_ << " variables" << std::endl;
+    //std::cout << "Working with " << n_inputs_ << " variables" << std::endl;
 
     // Parse TF metadata
     std::string tfmetadataPath = modelPath_ + "tf_metadata.txt";
     std::ifstream inputfile_tfmetadata{tfmetadataPath};
-    std::cout << "Reading file: "<< tfmetadataPath << std::endl;
+    //std::cout << "Reading file: "<< tfmetadataPath << std::endl;
     if(inputfile_tfmetadata.fail())  
     { 
         std::cout << "error" << std::endl;
@@ -71,7 +71,6 @@ NNEvaluation::DNNEvaluator::~DNNEvaluator()
 }
 
 void NNEvaluation::DNNEvaluator::open_session(){
-    if (verbose_) std::cout << "Opening Tensorflow session" << std::endl;
     if (session_ready_) return;
 
     graphDef_ = tensorflow::loadGraphDef(graphPath_); // TODO check what happens if file not present
@@ -86,7 +85,7 @@ float NNEvaluation::DNNEvaluator::scale_variable(int var_index, float & var){
     return (var - mean) / scale;
 }
 
-std::vector<float> NNEvaluation::DNNEvaluator::analyze(std::vector<float> data)
+float NNEvaluation::DNNEvaluator::analyze(std::vector<float> data)
 {
     // Check if tensorflow session is open, if not open it
     open_session();
@@ -96,79 +95,15 @@ std::vector<float> NNEvaluation::DNNEvaluator::analyze(std::vector<float> data)
     for (uint i = 0; i < n_inputs_; i++, d++)
     {
         *d = scale_variable(i, data[i]);
-        if(verbose_) std::cout << data[i] << "(" << *d << ") | ";
+        //if(verbose_) std::cout << data[i] << "(" << *d << ") | ";
     }
 
     // define the output and run
     std::vector<tensorflow::Tensor> outputs;
     tensorflow::run(session_, { { input_tensor_name_, input } }, { output_tensor_name_ }, &outputs);
 
-    std::vector<float> vecresult;
-   
-    if ( outputs[0].shape().dims() != 2) {
-      std::cout << "Tensor has NOT dimension 2. Not yet implemented!" << std::endl;
-      exit(1);
-    }
-    // case of vector-like tensors, e.g. shape: [1,X]
-    if ( outputs[0].shape().dim_size(0) == 1 ) { 
-      for (int i=0; i<outputs[0].shape().dim_size(1); ++i){
-        vecresult.push_back(outputs[0].matrix<float>()(0, i));
-      }
-    }
-    // matrix-like tensors -> not yet implemented
-    else {
-      std::cout << "Matrix-like tensors have not been implemented yet!" << std::endl;
-      exit(1);
-    }
-
-    return vecresult;
-}
-
-
-std::vector<std::vector<float>> NNEvaluation::DNNEvaluator::analyze_batch(std::vector<std::vector<float>> data)
-{
-    // Check if tensorflow session is open, if not open it
-    open_session();
-    uint batch_size = data.size();
-
-    tensorflow::Tensor input(tensorflow::DT_FLOAT, { batch_size, n_inputs_ });
-    auto input_tensor_mapped = input.tensor<float, 2>();
-    //float* d = input.flat<float>().data();
-    if (verbose_) std:: cout << "-----------------" << std::endl;
-    for (uint b = 0; b< batch_size; b++){
-        for (uint i = 0; i < n_inputs_; i++)
-        {   
-            input_tensor_mapped(b,i) = scale_variable(i, data[b][i]);
-            if(verbose_) std::cout <<  "["<< b <<","<<i<<"] " << data[b][i] << "->" <<  input_tensor_mapped(b,i) << ") | ";
-
-        }
-        if (verbose_) std::cout << std::endl;
-    }    
-
-    // define the output and run
-    std::vector<tensorflow::Tensor> outputs;
-    tensorflow::run(session_, { { input_tensor_name_, input } }, { output_tensor_name_ }, &outputs);
-
-    if(verbose_) std::cout << "Reading output. N. outputs:" << outputs.size() << " " << outputs[0].shape()  << std::endl;
-
-    std::vector<std::vector<float>> batch_results;
-    
-    if ( outputs[0].shape().dims() != 2) {
-      std::cout << "Tensor has NOT dimension 2. Not yet implemented!" << std::endl;
-      exit(1);
-    }
-     
-    else if ( outputs[0].shape().dims() == 2) {
-        // case of [batch, Y] tensors
-        for (uint b =0; b< batch_size; b++){
-            auto r = outputs[0].tensor<float,2>();
-            std::vector<float> vecresult;
-            for (int i=0; i<outputs[0].shape().dim_size(1); ++i){
-                vecresult.push_back(r(b, i));
-            }
-            batch_results.push_back(vecresult);
-        }
-    } 
-    return batch_results;
+    float result = outputs[0].matrix<float>()(0, outvar_);
+    //if (verbose_)  std::cout << "----> " << result << std::endl;
+    return result;
 }
 
